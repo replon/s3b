@@ -9,7 +9,6 @@ import boto3
 
 client = boto3.client('s3')
 paginator = client.get_paginator('list_objects')
-print('new version')
 
 def human_size(num, suffix="B"):
     for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
