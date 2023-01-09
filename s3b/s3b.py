@@ -111,7 +111,7 @@ def main():
         print("Connecting to S3 using...")
         print("  profile_name:", boto_session.profile_name)
         print("  aws_access_key_id:", boto_session.get_credentials().access_key)
-        print("  aws_secret_access_key:", boto_session.get_credentials().secret_key)
+        #print("  aws_secret_access_key:", boto_session.get_credentials().secret_key)
 
         s3 = None
         bucket_names = []
