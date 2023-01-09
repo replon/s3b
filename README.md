@@ -92,6 +92,8 @@ That's all!
 
 - (0.1.0) First version, support basic features
 - (0.1.1) Turn off color font in Windows, add setup scripts
+- (0.1.2) Speed up by removal of full scanning
+
 
 ## Future works
 

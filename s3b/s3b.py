@@ -7,6 +7,9 @@ from sys import exit
 
 import boto3
 
+client = boto3.client('s3')
+paginator = client.get_paginator('list_objects')
+print('new version')
 
 def human_size(num, suffix="B"):
     for unit in ["", "K", "M", "G", "T", "P", "E", "Z"]:
@@ -14,6 +17,51 @@ def human_size(num, suffix="B"):
             return "%3.1f %s%s" % (num, unit, suffix)
         num /= 1024.0
     return "%.1f %s%s" % (num, "Yi", suffix)
+
+
+def get_dir(bucket_name, prefix):
+    assert len(prefix) == 0 or prefix.endswith('/')
+    l = []
+    for result in paginator.paginate(Bucket=bucket_name, Prefix=prefix, Delimiter='/'):
+        if result.get('CommonPrefixes') is not None:
+            l.extend([subdir.get('Prefix')[len(prefix):] for subdir in result.get('CommonPrefixes')])
+        if result.get('Contents') is not None:
+            l.extend([obj.get('Key')[len(prefix):] for obj in result.get('Contents') if obj['Size'] > 0])
+    return l
+
+
+def is_dir(bucket_name, prefix):
+    assert len(prefix) == 0 or prefix.endswith('/')
+    for result in paginator.paginate(Bucket=bucket_name, Prefix=prefix, Delimiter='/'):
+        if result.get('CommonPrefixes') is not None:
+            return True
+        if result.get('Contents') is not None:
+            return True
+    return False
+
+
+def print_folder(bucket, current_path, limit=20):
+    list_dir = get_dir(bucket.name, current_path)
+    print()
+    if len(list_dir) == 0:
+        print("  (directory is empty)")
+    else:
+        print("(" + str(len(list_dir)) + " items)")
+        for k, item in enumerate(list_dir):
+            if k == limit:
+                print("  ...")
+                print("  (command 'l' to see the full list)")
+                break
+            if item.endswith("/"):
+                print(
+                    f'  {ConsoleColors.BOLD}{item:30}{ConsoleColors.END_COLOR} {"<dir>":>10}'
+                )
+            else:
+                print(
+                    f"  {ConsoleColors.BOLD}{item:30}{ConsoleColors.END_COLOR} {human_size(bucket.Object(current_path + item).content_length):>10}\t{str(bucket.Object(current_path + item).last_modified):} "
+                )
+    print()
+    return list_dir
 
 
 class ConsoleColors:
@@ -101,50 +149,9 @@ def main():
         bucket_name = bucket_names[int(bucket_select)]
         bucket = s3.Bucket(bucket_name)
 
-        object_list = list(bucket.objects.all())
-        browser = dict()
-        for obj in object_list:
-            splited = obj.key.split("/")
-            current = browser
-            for i, foldername in enumerate(splited):
-                if i + 1 == len(splited):  # last one is filename
-                    if foldername != "":
-                        current[foldername] = obj.key
-                else:
-                    if foldername not in current:
-                        current[foldername] = dict()
-                    current = current[foldername]
-
-        current = browser
         current_path = ""
+        list_dir = print_folder(bucket, current_path)
 
-        parents = []
-        parents_path = []
-
-        def print_current_folder(limit=20):
-            print()
-            if len(current) == 0:
-                print("  (directory is empty)")
-            else:
-                print("(" + str(len(current)) + " items)")
-                for k, item in enumerate(
-                    sorted(current.keys(), key=lambda x: -int(type(current[x]) is dict))
-                ):
-                    if k == limit:
-                        print("  ...")
-                        print("  (command 'l' to see the full list)")
-                        break
-                    if type(current[item]) is dict:
-                        print(
-                            f'  {ConsoleColors.BOLD}{item:30}{ConsoleColors.END_COLOR} {"<dir>":>10}'
-                        )
-                    else:
-                        print(
-                            f"  {ConsoleColors.BOLD}{item:30}{ConsoleColors.END_COLOR} {human_size(bucket.Object(current_path + item).content_length):>10}\t{str(bucket.Object(current_path + item).last_modified):} "
-                        )
-            print()
-
-        print_current_folder()
         while True:
             cmd = input(
                 ConsoleColors.OK_GREEN
@@ -161,7 +168,7 @@ def main():
             if cmd.startswith("!"):
                 os.system(cmd[1:])
             elif cmd.startswith("l"):
-                print_current_folder(-1)
+                list_dir = print_folder(bucket, current_path, limit=-1)
                 continue
             elif cmd.startswith("cd"):
                 splited = cmd.split()
@@ -169,31 +176,25 @@ def main():
                     print("\n  usage: cd dir_name\n")
                     continue
                 foldername = splited[1]
-                if foldername.endswith("/"):
-                    foldername = foldername[:-1]
-                if foldername == "..":
-                    if len(parents) > 0:
-                        current_path = parents_path.pop()
-                        current = parents.pop()
-                elif foldername == "~":
-                    parents.clear()
-                    parents_path.clear()
-                    current = browser
+                if not foldername.endswith("/"):
+                    foldername = foldername + "/"
+                if foldername == "../":
+                    current_path = current_path[: current_path.rfind("/", 0, -1) + 1]
+                elif foldername == "~/":
                     current_path = ""
-                elif foldername in current and type(current[foldername]) is dict:
-                    parents.append(current)
-                    parents_path.append(current_path)
-                    current = current[foldername]
-                    current_path = current_path + foldername + "/"
+                elif foldername in list_dir:
+                    current_path = current_path + foldername
+                elif is_dir(bucket_name, foldername):
+                    current_path = foldername
                 else:
                     print(
                         ConsoleColors.FAIL,
-                        "[FAIL] No such dir in the current path:",
+                        "[FAIL] No such directory:",
                         foldername,
                     )
                     continue
                 print("<" + bucket_name + "> ~/" + current_path + "$")
-                print_current_folder()
+                list_dir = print_folder(bucket, current_path)
             elif cmd.startswith("up"):
                 splited = cmd.split()
                 if len(splited) not in [2, 3]:
@@ -213,7 +214,6 @@ def main():
                     else:
                         filename = filepath.split("/")[-1]
                     bucket.Object(current_path + filename).upload_file(filepath)
-                    current[filename] = current_path + filename
                     print(ConsoleColors.OK_BLUE, "[SUCCESS] uploaded", filename)
                 else:  # multiple file upload
                     if len(splited) == 3:
@@ -226,7 +226,6 @@ def main():
                     for filepath in filelist:
                         filename = filepath.split("/")[-1]
                         bucket.Object(current_path + filename).upload_file(filename)
-                        current[filename] = current_path + filename
                     print(
                         ConsoleColors.OK_BLUE,
                         "[SUCCESS] uploaded " + str(len(filelist)) + " files",
@@ -240,12 +239,12 @@ def main():
                 get_name = filename
                 if len(splited) >= 3:
                     get_name = splited[2]
-                if filename in current and type(current[filename]) is str:
-                    bucket.Object(current[filename]).download_file(get_name)
+                if filename in list_dir and not filename.endswith("/"):
+                    bucket.Object(current_path + filename).download_file(get_name)
                     print(ConsoleColors.OK_BLUE, "[SUCCESS] downloaded ", get_name)
                 else:
                     matched_list = fnmatch.filter(
-                        filter(lambda x: type(current[x]) is str, current.keys()),
+                        filter(lambda x: not x.endswith('/'), list_dir),
                         filename,
                     )
                     if len(matched_list) > 0:  # multiple file download
@@ -260,7 +259,7 @@ def main():
                             "downloading " + str(len(matched_list)) + " matched files"
                         )
                         for name in matched_list:
-                            bucket.Object(current[name]).download_file(name)
+                            bucket.Object(current_path + name).download_file(name)
                         print(ConsoleColors.OK_BLUE, "[SUCCESS] done!")
                     else:
                         print(
@@ -274,53 +273,57 @@ def main():
                     print("\n  usage: mkdir dir_name\n")
                     continue
                 new_folder_name = splited[1]
-                bucket.put_object(Key=current_path + new_folder_name + "/")
-                current[new_folder_name] = dict()
-                print_current_folder()
+                if not new_folder_name.endswith('/'):
+                    new_folder_name = new_folder_name + '/'
+                if new_folder_name in list_dir:
+                    print(
+                        ConsoleColors.FAIL,
+                        "[FAIL] There is already a directory with the same name:",
+                        new_folder_name,
+                    )
+                else:
+                    bucket.put_object(Key=current_path + new_folder_name)
+                    list_dir = print_folder(bucket, current_path)
             elif cmd.startswith("rm"):
                 splited = cmd.split()
                 if len(splited) != 2:
                     print("\n  usage: rm file_or_dir_name\n")
                     continue
                 filename = splited[1]
-                if filename in current:
-                    if type(current[filename]) is str:
-                        if (
-                            input(
-                                "  Are you sure you want to delete "
-                                + filename
-                                + "? (y/n) "
-                            ).lower()
-                            == "y"
-                        ):
-                            bucket.Object(current[filename]).delete()
-                            current.pop(filename)
-                            print("deleted " + filename)
-                            print_current_folder()
-                    elif type(current[filename]) is dict:
-                        if (
-                            input(
-                                "  '"
-                                + filename
-                                + "/' is a directory. Are you sure you want to delete it? (y/n) "
-                            ).lower()
-                            == "y"
-                        ):
-                            cnt = 0
-                            for obj in filter(
-                                lambda x: x.key.startswith(
-                                    current_path + filename + "/"
-                                ),
-                                list(bucket.objects.all()),
-                            ):
-                                obj.delete()
+                if not filename.endswith('/') and filename in list_dir:
+                    if (
+                        input(
+                            "  Are you sure you want to delete "
+                            + filename
+                            + "? (y/n) "
+                        ).lower()
+                        == "y"
+                    ):
+                        bucket.Object(current_path + filename).delete()
+                        print("deleted " + filename)
+                        list_dir = print_folder(bucket, current_path)
+                elif (filename.endswith('/') and filename in list_dir) or filename + '/' in list_dir:
+                    if not filename.endswith('/'):
+                        filename = filename + '/'
+                    if (
+                        input(
+                            "  '"
+                            + filename
+                            + "' is a directory. Are you sure you want to delete it? (y/n) "
+                        ).lower()
+                        == "y"
+                    ):
+                        cnt = 0
+                        for obj in bucket.objects.filter(Prefix=current_path + filename):
+                            length = obj.size 
+                            obj.delete()
+                            if length > 0:
                                 cnt += 1
-                            current.pop(filename)
-                            print("deleted " + str(cnt) + " files")
-                            print_current_folder()
+                        print("deleted " + str(cnt) + " files")
+                        list_dir = print_folder(bucket, current_path)
                 else:
                     matched_list = fnmatch.filter(
-                        filter(lambda x: type(current[x]) is str, current.keys()),
+                        filter(lambda x: not x.endswith('/'), list_dir),
                         filename,
                     )
                     if len(matched_list) > 0:
@@ -333,10 +336,9 @@ def main():
                             == "y"
                         ):
                             for name in matched_list:
-                                bucket.Object(current[name]).delete()
-                                current.pop(name)
+                                bucket.Object(current_path + name).delete()
                             print("deleted " + str(len(matched_list)) + " files")
-                            print_current_folder()
+                            list_dir = print_folder(bucket, current_path)
                     else:
                         print(
                             ConsoleColors.FAIL,
