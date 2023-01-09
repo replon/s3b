@@ -95,9 +95,7 @@ That's all!
 - (0.1.2) Speed up by removal of full scanning
 
 
-## Future works
+## Future works (Not supported yet)
 
-- Speed up (not scanning all of files at the beginning)
 - `mv` : move files
-- `rm -r` : recursive deletion
 - `download -r` : recursive download
