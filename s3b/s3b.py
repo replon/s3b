@@ -4,6 +4,8 @@ import sys
 import traceback
 from glob import fnmatch, glob
 from sys import exit
+from s3b import __version__
+
 
 import boto3
 
@@ -78,7 +80,7 @@ class ConsoleColors:
 
 
 def main():
-    print("\nS3 Browser - github.com/replon/s3b")
+    print(f"\nS3 Browser {__version__} - github.com/replon/s3b")
     print("============================================")
     boto_session = None
 
